@@ -22,5 +22,5 @@ J_dist <- function(A, B){
   # Compute the Jaccard distance of two input samples A, B
   kmers_A = ls(A)
   kmers_B = ls(B)
-  length(intersect(kmers_A, kmers_B)) / length(union(kmers_A, kmers_B))
+  1 - length(intersect(kmers_A, kmers_B)) / length(union(kmers_A, kmers_B))
 }
