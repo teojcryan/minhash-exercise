@@ -1,45 +1,127 @@
 library('seqinr') # Biological Sequences Retrieval and Analysis
-library('seqR') # Fast and Comprehensive K-Mer Counting Package
+library('seqR')   # Fast and Comprehensive K-Mer Counting Package
 library('digest') # Compact Hash Digests of R Objects
+library('ape')    # Analyses of Phylogenetics and Evolution
+library('dplyr')
+library('tidyr')
+library('ggplot2')
 #library('kmer')
-source('code/functions.R')
+source('code/functions.R') # own function
 
-### Read data -------------
-R6 <- read.fasta(file = 'data/R6.fa')
-R6_genome = paste(toupper(R6[[1]]), collapse='') # extract genome as string
+k = 14 # size of kmer
 
-TIGR4 <- read.fasta(file = 'data/TIGR4.fa')
-TIGR4_genome = paste(toupper(TIGR4[[1]]), collapse='') # extract genome as string
+# Read and process fasta into kmers ---------------------
+R6_kmers = fasta2kmer(file = 'data/R6.fa', k)
+TIGR4_kmers = fasta2kmer(file = 'data/TIGR4.fa', k)
 
-### Reading k-mers --------------
-k = 14
+# name 'draft' sequences as D82, D84
+D82_kmers = fasta2kmer(file = 'data/14412_3#82.contigs_velvet.fa', k)
+D84_kmers = fasta2kmer(file = 'data/14412_3#84.contigs_velvet.fa', k)
 
-R6_kmer <- kmer2(R6_genome, k)
-TIGR4_kmer <- kmer2(TIGR4_genome, k)
+### create hash and sketches from kmers ---------------------
+# create vector of input names
+inputs = c('R6', 'TIGR4', 'D82' ,'D84')
+inputs = factor(inputs, levels=inputs)
+ninputs = length(inputs) # number of inputs
 
-# Attempts using own function/ other packages
-# r6_kmer <- kmer(genome_string, k) # own function takes too long
-# r6_kmer <- seqinr::count(genome, k) # Error: memory exhausted (limit reached?)
-# r6_kmer <- kmer::kcount(genome, k) # Error: cannot allocate vector of size 14.0 Gb
+# create sorted hashes for all inputs
+for (i in inputs){
+  print(paste('input:', i)) # for annotating loops
+  
+  # create hash and sort
+  assign(paste(i,'hash',sep='_'),
+         sort(unlist(lapply(get(paste(i,'kmers',sep='_')), 
+                       digest, algo = "murmur32", serialize = F, seed = 0)), method='quick'))
+}
 
-### Simple Jaccard distances --------------
-A = c('TTGAAAGAAAAACA','TGAAAGAAAAACAA','GAAAGAAAAACAAT',
-      'AAAGAAAAACAATT','AAGAAAAACAATTT','AGAAAAACAATTTT','GAAAAACAATTTTG')
-B = c('TTGAAAGAAAAACA','TGAAAGAAAAACAA','GAAAGAAAAACAAT',
-      'AAAGAAAAACAATT','GAAAAACAATTTTG','CTCGATCCATGTAT','TCGATCCATGTATG')
+ss = c(1E3, 1E4, 1E5, 1E6) # sketch size
 
-J_dist(A,B)
+# create sketches with varying sketch sizes for all inputs
+for (s in ss){
+  print(paste('sketch size:', format(s, scientific=T)))
+  
+  for (i in inputs){
+    print(paste('input:', i)) 
+    
+    # extract sketch from hash
+    sketch_name = paste(i,'sketch',format(s, scientific=T),sep='_')
+    assign(sketch_name,
+           get(paste(i,'hash',sep='_'))[1:s])
+    
+    # save sketch in .txt file
+    cat(get(sketch_name),
+        file=paste0('output/',i,'_sketch_',format(s, scientific=T),'.txt'), sep="\n")
+  }
+}
 
-### MinHash Jaccard distances --------------
-# objective: take an unbiased sample of the k-mers and calculate Jaccard distance from this smaller subset
-s = 10000 # sketch size
 
-R6_hash = unlist(lapply(R6_kmer, digest, algo = "murmur32", serialize = F, seed = 0))
-R6_sketch = sort(R6_hash, method="quick")[1:s]
-cat(R6_sketch,file="output/R6_sketch.txt",sep="\n")
+### compute MinHash Jaccard distances --------------
+# compute Jaccard distances for varying sketch sizes for all inputs
+res_sketch = list() # store results as list
+r = 1 # row counter
+for (s in ss){
+  # calculation is doubled here, not ideal
+  for (i in 1:ninputs){
+    for (j in 1:ninputs){
+      res_sketch[[r]] = c(format(s, scientific=T), 
+                       as.character(inputs[i]), 
+                       as.character(inputs[j]),
+                       J_dist(get(paste(inputs[i],'sketch',format(s, scientific=T),sep='_')),
+                              get(paste(inputs[j],'sketch',format(s, scientific=T),sep='_'))))
+      r = r+1
+    }
+  }
+}
 
-TIGR4_hash = unlist(lapply(TIGR4_kmer, digest, algo = "murmur32", serialize = F, seed = 0))
-TIGR4_sketch = sort(TIGR4_hash, method="quick")[1:s]
-cat(TIGR4_sketch,file="output/TIGR4_sketch",sep="\n")
+# convert list to data frame
+res_sketch = as.data.frame(do.call(rbind, res_sketch))
 
-J_dist(R6_hash, TIGR4_hash)
+# compute Jaccard distances for complete hash
+res_hash = list() # store results as list
+r = 1 # row counter
+for (i in 1:ninputs){
+  for (j in 1:ninputs){
+    res_hash[[r]] = c("H", 
+                     as.character(inputs[i]), 
+                     as.character(inputs[j]),
+                     J_dist(get(paste(inputs[i],'hash',sep='_')),
+                            get(paste(inputs[j],'hash',sep='_'))))
+    r = r+1
+  }
+}
+
+# convert list to data frame
+res_hash = as.data.frame(do.call(rbind, res_hash))
+
+# combine into single data frame
+res = rbind(res_hash, res_sketch)
+names(res) = c('s', 'x', 'y', 'J')
+res = res %>% mutate(J = as.numeric(J))
+
+# Plot of distances
+ggplot(mapping = aes(x=factor(y, levels=inputs), y=J, col=s)) +
+  # plot J distance for varying s
+  geom_point(data = filter(res, s != 'H', J > 0)) +
+  # plot J distance computed from whole hash
+  geom_point(data = filter(res, s == 'H', J >0), pch=4, col=1, size=3) +
+  facet_wrap(~factor(x, levels=inputs), scales='free_y') +
+  labs(title = 'Comparison of Jaccard distance between samples for varying s',
+       subtitle = 'Full distances are marked by crosses') +
+  ylab('Jaccard distance') +
+  xlab('Sample') +
+  theme_bw() + 
+  theme(legend.position = 'bottom')
+
+### Neighbour Joining tree ---------------------
+# convert distances in data frame to matrix
+J_mats = list()
+for (ss in unique(res$s)){
+  J_mats[[ss]] = res %>%
+    filter(s == ss) %>%
+    pivot_wider(-s, names_from = y, values_from = J)
+}
+J_mats = lapply(J_mats, df.matrix) 
+
+# plot neighbour joining trees
+plot(ape::nj(J_mats$H))
+plot(ape::nj(J_mats$`1e+03`))
