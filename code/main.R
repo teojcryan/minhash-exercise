@@ -1,16 +1,18 @@
-library('seqinr') # Biological Sequences Retrieval and Analysis
-library('seqR')   # Fast and Comprehensive K-Mer Counting Package
-library('digest') # Compact Hash Digests of R Objects
-library('ape')    # Analyses of Phylogenetics and Evolution
-library('dplyr')
-library('tidyr')
-library('ggplot2')
-#library('kmer')
-source('code/functions.R') # own function
+# load necessary packages
+library('seqinr')  # Biological Sequences Retrieval and Analysis
+library('seqR')    # Fast and Comprehensive K-Mer Counting Package
+library('digest')  # Compact Hash Digests of R Objects
+library('ape')     # Analyses of Phylogenetics and Evolution
+library('dplyr')   # data manipulation
+library('tidyr')   # tidy messy data
+library('ggplot2') # data viz
+#library('kmer')   # Fast K-Mer Counting
+source('code/functions.R') # load own functions
 
 k = 14 # size of kmer
 
 # Read and process fasta into kmers ---------------------
+# fasta2kmer is defined in 'code/functions.R'
 R6_kmers = fasta2kmer(file = 'data/R6.fa', k)
 TIGR4_kmers = fasta2kmer(file = 'data/TIGR4.fa', k)
 
@@ -26,7 +28,7 @@ ninputs = length(inputs) # number of inputs
 
 # create sorted hashes for all inputs
 for (i in inputs){
-  print(paste('input:', i)) # for annotating loops
+  print(paste('input:', i)) 
   
   # create hash and sort
   assign(paste(i,'hash',sep='_'),
@@ -34,7 +36,7 @@ for (i in inputs){
                        digest, algo = "murmur32", serialize = F, seed = 0)), method='quick'))
 }
 
-ss = c(1E3, 1E4, 1E5, 1E6) # sketch size
+ss = c(1E3, 1E4, 1E5, 1E6) # varying sketch sizes
 
 # create sketches with varying sketch sizes for all inputs
 for (s in ss){
@@ -49,20 +51,20 @@ for (s in ss){
            get(paste(i,'hash',sep='_'))[1:s])
     
     # save sketch in .txt file
-    cat(get(sketch_name),
-        file=paste0('output/',i,'_sketch_',format(s, scientific=T),'.txt'), sep="\n")
+    # cat(get(sketch_name),
+    #    file=paste0('output/',i,'_sketch_',format(s, scientific=T),'.txt'), sep="\n")
   }
 }
 
-
 ### compute MinHash Jaccard distances --------------
-# compute Jaccard distances for varying sketch sizes for all inputs
-res_sketch = list() # store results as list
+# for varying sketch sizes for all inputs
+res_sketch = list() # to store results
 r = 1 # row counter
 for (s in ss){
-  # calculation is doubled here, not ideal
+  #! calculation is doubled here, not ideal
   for (i in 1:ninputs){
     for (j in 1:ninputs){
+      # calculate Jaccard distance and store results in a row
       res_sketch[[r]] = c(format(s, scientific=T), 
                        as.character(inputs[i]), 
                        as.character(inputs[j]),
@@ -73,14 +75,14 @@ for (s in ss){
   }
 }
 
-# convert list to data frame
-res_sketch = as.data.frame(do.call(rbind, res_sketch))
+res_sketch = as.data.frame(do.call(rbind, res_sketch)) # convert list to data frame
 
-# compute Jaccard distances for complete hash
-res_hash = list() # store results as list
+# from complete hash
+res_hash = list() # to store results
 r = 1 # row counter
 for (i in 1:ninputs){
   for (j in 1:ninputs){
+    # calculate Jaccard distance and store results in a row
     res_hash[[r]] = c("H", 
                      as.character(inputs[i]), 
                      as.character(inputs[j]),
@@ -93,13 +95,14 @@ for (i in 1:ninputs){
 # convert list to data frame
 res_hash = as.data.frame(do.call(rbind, res_hash))
 
-# combine into single data frame
+# combine results into single data frame
 res = rbind(res_hash, res_sketch)
-names(res) = c('s', 'x', 'y', 'J')
-res = res %>% mutate(J = as.numeric(J))
+names(res) = c('s', 'x', 'y', 'J') # apply column names
+res = res %>% mutate(J = as.numeric(J)) # convert distance to numeric
 
-# Plot of distances
-ggplot(mapping = aes(x=factor(y, levels=inputs), y=J, col=s)) +
+### Plot of distances ----------------
+# differences by sample
+p1 <- ggplot(mapping = aes(x=factor(y, levels=inputs), y=J, col=s)) +
   # plot J distance for varying s
   geom_point(data = filter(res, s != 'H', J > 0)) +
   # plot J distance computed from whole hash
@@ -111,6 +114,23 @@ ggplot(mapping = aes(x=factor(y, levels=inputs), y=J, col=s)) +
   xlab('Sample') +
   theme_bw() + 
   theme(legend.position = 'bottom')
+
+# differences by s
+p2 <- ggplot(mapping = aes(x=s, y=J)) +
+  # plot J distance for varying s
+  geom_point(data = filter(res, s != 'H', J > 0)) +
+  # plot J distance computed from whole hash
+  geom_point(data = filter(res, s == 'H', J > 0), pch=4, col=1, size=3) +
+  facet_wrap(~factor(x, levels=inputs) + factor(y, levels=inputs), scales='free_y') +
+  labs(title = 'Comparison of Jaccard distance between samples for varying s',
+       subtitle = 'Full distances are marked by crosses') +
+  ylab('Jaccard distance') +
+  xlab('Sample') +
+  theme_bw() + 
+  theme(legend.position = 'bottom')
+
+ggsave(filename = 'output/figures/J_dist_sample.png', p1, width = 8, height = 6)
+ggsave(filename = 'output/figures/J_dist_s.png', p2, width = 10, height = 6)
 
 ### Neighbour Joining tree ---------------------
 # convert distances in data frame to matrix
@@ -124,4 +144,7 @@ J_mats = lapply(J_mats, df.matrix)
 
 # plot neighbour joining trees
 plot(ape::nj(J_mats$H))
+ggsave(filename = 'output/figures/nj_hash.png', p1, width = 8, height = 6)
+
 plot(ape::nj(J_mats$`1e+03`))
+ggsave(filename = 'output/figures/nj_sketch.png', p1, width = 8, height = 6)
