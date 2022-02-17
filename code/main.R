@@ -143,8 +143,13 @@ for (ss in unique(res$s)){
 J_mats = lapply(J_mats, df.matrix) 
 
 # plot neighbour joining trees
+png(file='output/figures/nj_hash.png',
+    width=600, height=400)
 plot(ape::nj(J_mats$H))
-ggsave(filename = 'output/figures/nj_hash.png', p1, width = 8, height = 6)
+dev.off()
 
+png(file='output/figures/nj_sketch.png',
+    width=600, height=400)
 plot(ape::nj(J_mats$`1e+03`))
-ggsave(filename = 'output/figures/nj_sketch.png', p1, width = 8, height = 6)
+dev.off()
+
